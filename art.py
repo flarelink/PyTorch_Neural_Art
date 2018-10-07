@@ -21,9 +21,8 @@ from __future__ import print_function, division
 import torch
 import torchvision
 from torchvision import transforms
-from torchvision.datasets import ImageFolder
 import torch.nn as nn
-import torch.nn.functional as F
+from torchvision.models import vgg19, vgg16
 import numpy as np
 import matplotlib.pyplot as plt
 import time
@@ -35,7 +34,7 @@ import random
 import io
 import requests
 from PIL import Image
-plt.ion()
+plt.ion() 
 
 
 # Device configuration
@@ -45,20 +44,25 @@ if torch.cuda.is_available():
 else:
     device = torch.device('cpu')
     print(device, " the CPU device is selected")
-    
 
 
-def load_imgs(targ_img_loc, targ_on, style_img_loc, style_on):
+"""
+##############################################################################
+# Image Functions
+##############################################################################
+"""
+def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
     """
-    Load target and style images
-    :param targ_img_loc:   target img to have neural art applied to;
+    Load content and style images
+    :param cont_img_loc:   content img to have neural art applied to;
                            will either be a URL or location to the img
-    :param targ_on:        determine if image is from online or local
+    :param cont_on:        determine if image is from online or local
                            to determine how to load img
     :param style_img_loc:  style img to have neural art used with;
                            will either be a URL or location to the img
     :param style_on:       determine if image is from online or local
                            to determine how to load img
+    :param out_img_size:   output image size
     :return: loading images
     """
 
@@ -67,17 +71,21 @@ def load_imgs(targ_img_loc, targ_on, style_img_loc, style_on):
     # center crop to 224 for VGG model
     # to tensor for GPU processing
     trans = transforms.Compose([
-        transforms.Resize(256),
+        transforms.Resize(out_img_size),
         transforms.CenterCrop(224),
-        transforms.ToTensor()
-        ])
+        transforms.ToTensor(),
+        transforms.Normalize(
+               mean=[0.485, 0.456, 0.406],
+              std=[0.229, 0.224, 0.225]
+    )])
 
-    # create pillow image from target image
-    if(targ_on):
-      targ_img = requests.get(targ_img_loc)
-      pil_targ = Image.open(io.BytesIO(targ_img.content))
+    # create pillow image from content image
+    if(cont_on):
+      cont_img = requests.get(cont_img_loc)
+      pil_cont = Image.open(io.BytesIO(cont_img.content))
     else:
-      pil_targ = Image.open(targ_img_loc)
+      pil_cont = Image.open(cont_img_loc)
+    width, height = pil_cont.size
 
     # create pillow image from style image
     if(style_on):
@@ -86,54 +94,163 @@ def load_imgs(targ_img_loc, targ_on, style_img_loc, style_on):
     else:
       pil_style = Image.open(style_img_loc)
 
+
     # apply transforms to imgs
-    targ_trans = trans(pil_targ)
-    print(targ_trans.size())
-    style_trans = trans(pil_style)
-    print(style_trans.size())
+    cont_trans = trans(pil_cont).unsqueeze(0).to(device)
+    style_trans = trans(pil_style).unsqueeze(0).to(device)
+    
+    # create new image that will become stylized content image
+    new_trans = torch.randn(cont_trans.data.size(), device=device)
 
-    return targ_trans, style_trans
+    return cont_trans, style_trans, new_trans
 
+    
+def imshow(img, title='img'):
+    """
+    Function to show images
+    param img:   input image to show
+    param title: title of image
+    """
+    transform = transforms.ToPILImage()
+    plot_img = img.squeeze(0)
+    plot_img = transform(plot_img)
+    plt.imshow(plot_img)
+    plt.title(title)
+    #plt.pause(0.01)
 
 
 """
 ##############################################################################
-# CNN classes for network 
+# Feature Map Extraction
 ##############################################################################
 """
-class CNN_1Lay_FullTrain(nn.Module):
-    """
-    CNN with 1 conv layer fully trained and 1 fully connected layer
-    """
-    # Convolutional neural network (two convolutional layers)
-    def __init__(self, nf=64, filter_d=3, weights=None, in_chan=1, num_classes=10):
-        super(CNN_1Lay_FullTrain, self).__init__()
 
-        # CNN creation
-        if (weights is None):
-            print('weight type not specified')
+class Feature_Extraction(nn.Module):
+  def __init__(self):
+    # extract conv layer activation maps
+    super(Feature_Extraction, self).__init__()
+    self.sel_conv = ['0', '5', '10', '19', '28']
+    self.vgg = vgg19(pretrained=True).features
+  
+  def forward(self, x):
+    features = []
+    for name, layer in self.vgg._modules.items():
+      x = layer(x)
+      if name in self.sel_conv:
+        features.append(x)
+    return features
 
-        self.conv1 = nn.Conv2d(in_channels=in_chan,  # 1 input channel since b/w
-                               out_channels=nf,  # number of filters
-                               kernel_size=filter_d,  # filter size
-                               stride=1,  # stride of 1
-                               padding=1)  # padding of 1
-        self.conv1.weight = nn.Parameter(weights)
-        self.conv1.weight.requires_grad = True
 
-        self.fc = nn.Linear(28 * 28 * nf, num_classes)  # 10 classes
+def feature_extract(model):
+  """
+  Create a new model that just has the conv layers that are named
+  param model: input VGG19 model
+  returns: new model
+  """
+  new_model = nn.Sequential()
+  i = 0 # counter for each time a convolution layer is seen
 
-        # print('The output size would be: {:d}'.format(outputSize(28, 3, 1, 1)))
+  # make names for each conv layer in VGG19
+  for layer in model.children():
+    if isinstance(layer, nn.Conv2d):
+      i += 1
+      name = 'conv_{}'.format(i)
 
-    # CNN forward pass
-    def forward(self, x):
-        c1 = self.conv1(x)
-        x = F.relu(c1)
-        # print(x.shape)
-        x = x.view(-1, 28 * 28 * 64)
-        x = self.fc(x)
-        return x
 
+    new_model.add_module(name, layer)
+
+
+"""
+##############################################################################
+# Loss Functions
+##############################################################################
+"""
+# function for content image loss compared to new output image
+def content_loss(F, P):
+  """
+  Obtains content loss 
+  param: P = content image feature map in layer l
+  param: F = new image feature map in layer l
+  return content loss of images
+  """
+  loss = torch.mean((F - P)**2)
+  return loss
+
+def gram_matrix(F):
+  """
+  param F: feature map
+  return gram matrix of feature map
+  """
+  gm = torch.mm(F, F.t())
+  return gm
+
+# function for style image loss compared to new output image
+def style_loss(F, S, n, h, w):
+  """
+  param F: feature map of new img
+  param S: feature map of style img
+  param n: number of feature maps
+  param h: height of feature maps
+  param w: width of feature maps
+  return style loss of images
+  """
+  loss = torch.mean((F - S)**2) / (n * h * w)
+  return loss
+
+
+"""
+##############################################################################
+# Training
+##############################################################################
+"""
+def training(model, optimizer, n_epochs, content_img, style_img, new_img, style_weights, name):
+  """
+  Train from style and content images to make new image
+  """
+  for epoch in range(n_epochs):
+    # get features from each img
+    cont_feat = model(content_img)
+    style_feat = model(style_img)
+    new_feat = model(new_img)
+
+    # initial loss set to 0
+    cont_loss = 0
+    sty_loss = 0
+
+    # run through feature maps of each image
+    for cf, sf, nf in zip(cont_feat, style_feat, new_feat):
+      # compute content loss
+      cont_loss += content_loss(nf, cf)
+
+      # extract feature map shapes from new image
+      b, n, h, w = nf.size() # b=batch size; c = number of feature maps; (h, w) = feature map dimensions, so h=height, and w=width
+      sf = sf.view(n, h * w)
+      nf = nf.view(n, h * w)
+
+      # calculate gram matrices
+      sf = gram_matrix(sf)
+      nf = gram_matrix(nf)
+
+      # compute style loss
+      sty_loss += style_loss(nf, sf, n, h, w)
+
+    # calculate total loss and then backpropagate
+    total_loss = cont_loss + sty_loss * style_weights
+    optimizer.zero_grad()
+    total_loss.backward()
+    optimizer.step()
+
+  # save output image
+  final_img = new_img.clone().squeeze()
+  final_img = final_img.clamp_(0, 1)
+  torchvision.utils.save_image(final_img, '{}.png'.format(name))
+  #imshow(final_img)
+
+"""
+##############################################################################
+# Parser
+##############################################################################
+"""
 def create_parser():
   """
   return: parser inputs
@@ -154,20 +271,28 @@ def create_parser():
   parser.add_argument('--log_name', type=str, default='testing',
                         help='Specify log name, if not specified then program will default to testing log name; default=testing')
 
-  # arguments for target and style image locations
-  parser.add_argument('--targ_img_loc', type=str, default='https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg', # cute cat img default :3
-                        help='Determine location of targ img, whether online or not; default=https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg')
-  parser.add_argument('--targ_on', type=str2bool, nargs='?', default=True,
-                        help='Flag to determine if target image is from online link or not; default=True')
+  # arguments for content and style image locations
+  parser.add_argument('--cont_img_loc', type=str, default='https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg', # cute cat img default :3
+                        help='Determine location of cont img, whether online or not; default=https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg')
+  parser.add_argument('--cont_on', type=str2bool, nargs='?', default=True,
+                        help='Flag to determine if content image is from online link or not; default=True')
 
   parser.add_argument('--style_img_loc', type=str, default='https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg', # cute cat img default :3
                         help='Determine location of style img, whether online or not; default=https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg')
   parser.add_argument('--style_on', type=str2bool, nargs='?', default=True,
                         help='Flag to determine if style image is from online link or not; default=True')
   
-  # arguments for hyperparameters
-  parser.add_argument('--n_epochs', type=int, default=50,
-                        help='Defines num epochs for training; default=50')
+  # arguments for image parameters
+  parser.add_argument('--img_size', type=int, default=256,
+                        help='Determines output image pixel x pixel size; default=256')
+  parser.add_argument('--style_weights', type=int, default=100,
+                        help='Determines how much effect style has on image; default=100')
+  parser.add_argument('--name', type=str, default='test',
+                        help='Determines output image name; default=test')
+
+  # arguments for other hyperparameters
+  parser.add_argument('--n_epochs', type=int, default=2000,
+                        help='Defines num epochs for training; default=2000')
   parser.add_argument('--lr', type=float, default=0.001,
                         help='Defines learning rate for training; default=0.001')
   parser.add_argument('--random_seed', type=int, default=7,
@@ -184,61 +309,66 @@ def create_parser():
 ##############################################################################
 """
 if __name__ == '__main__':
-    """
-    Runs through two images iteratively to make neural artwork~
-    """
-    
-    # parsing input arguments
-    args = create_parser()
+  """
+  Runs through two images iteratively to make neural artwork~
+  """
+  
+  # parsing input arguments
+  args = create_parser()
 
-    # double check random seed
-    if (args.random_seed == None):
-         args.random_seed = random.randint(1, 1000)
+  # double check random seed
+  if (args.random_seed == None):
+       args.random_seed = random.randint(1, 1000)
 
-    # set reproducible random seed
-    np.random.seed(args.random_seed)
-    torch.manual_seed(args.random_seed)
-    
-    # make logs directory if it doesn't exist
-    if(os.path.exists("./logs/") == False):
-      os.mkdir('logs')
-    
+  # set reproducible random seed
+  np.random.seed(args.random_seed)
+  torch.manual_seed(args.random_seed)
+  
+  # make logs directory if it doesn't exist
+  if(os.path.exists("./logs/") == False):
+    os.mkdir('logs')    
 
-    # open log files and fill in hyperparameters
-    today_date = str(datetime.today()).replace(':', '_').replace(' ', '_')
-    log_file = open('./logs/log_run_{}_{}.txt'.format(today_date, args.log_name), 'w+')
-    log_file.write('num_epochs     = {:d} \n'.format(args.n_epochs))
-    log_file.write('learning_rate  = {} \n'.format(args.lr))
-    log_file.write('random_seed    = {:d} \n'.format(args.random_seed))
+  # open log files and fill in hyperparameters
+  today_date = str(datetime.today()).replace(':', '_').replace(' ', '_')
+  log_file = open('./logs/log_run_{}_{}.txt'.format(today_date, args.log_name), 'w+')
+  log_file.write('img_size       = {:d} \n'.format(args.img_size))
+  log_file.write('num_epochs     = {:d} \n'.format(args.n_epochs))
+  log_file.write('learning_rate  = {} \n'.format(args.lr))
+  log_file.write('random_seed    = {:d} \n'.format(args.random_seed))
+  log_file.write('style_weights  = {:d} \n'.format(args.style_weights))
 
+  # start timer
+  start_time = time.time()
+  # load images
+  cont_img, style_img, new_img = load_imgs(args.cont_img_loc, args.cont_on, args.style_img_loc, args.style_on, args.img_size)
+  new_img = new_img.requires_grad_(True)
+  log_file.write('Images loaded successfully \n')
+  print('Images loaded successfully')
 
-    # start timer
-    start_time = time.time()
-    targ_img, style_img = load_imgs(args.targ_img_loc, args.targ_on, args.style_img_loc, args.style_on)
-    log_file.write('images loaded successfully \n \n')
+  # display images
+  imshow(cont_img, title='content')
+  imshow(style_img, title='style')
+  imshow(new_img, title='new')
 
-    end_time = time.time()
-    time_taken = end_time - start_time
+  # define optimizer
+  optimizer = torch.optim.Adam([new_img], lr=args.lr, betas=[0.5, 0.999])
+  # import pretrained model
+  model = Feature_Extraction().to(device).eval()
+  log_file.write('Model loaded successfully \n')
+  print('Model loaded successfully \n')
 
-    #plt.figure(wt_index)
-    #plt.subplots_adjust(hspace=0.5)
-    #plt.subplot(211)
-    #plt.title('Loss plot ' + type_ + ' distribution')
-    #plt.xlabel('Epochs')
-    #plt.ylabel('Training Loss')
-    #plt.plot(loss_list)
-    #plt.subplot(212)
-    #plt.xlabel('Epochs')
-    #plt.ylabel('Accuracy')
-    #plt.plot(train_acc_list, 'r', label='training')
-    #plt.plot(test_acc_list, 'b', label='testing')
-    #plt.legend(loc='lower right')
-    #plt.savefig('./plots/' + today_time + '_' + args.log_name + '_' + type_ + '.png')
-    #plt.close('all')
+  log_file.write('Training commencing \n')
+  print('Training commencing \n')
+  training(model, optimizer, args.n_epochs, cont_img, style_img, new_img, args.style_weights, args.name)
+  log_file.write('Training has finished \n')
+  print('Training has finished \n')
 
-    print('Time taken: {:.2f}mins \n'.format(time_taken/60))
-    log_file.write('Time taken for : {:.2f}s \n'.format(time_taken))
+  end_time = time.time()
+  time_taken = end_time - start_time
 
-    log_file.close()
+  log_file.write('Time taken: {:.2f}mins \n'.format(time_taken/60))
+  print('Time taken: {:.2f}mins \n'.format(time_taken/60))
 
-    
+  log_file.close()
+
+  
