@@ -100,7 +100,8 @@ def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
     style_trans = trans(pil_style).unsqueeze(0).to(device)
     
     # create new image that will become stylized content image
-    new_trans = torch.randn(cont_trans.data.size(), device=device)
+    #new_trans = torch.randn(cont_trans.data.size(), device=device)
+    new_trans = cont_trans.clone().requires_grad_(True)
 
     return cont_trans, style_trans, new_trans
 
@@ -116,7 +117,7 @@ def imshow(img, title='img'):
     plot_img = transform(plot_img)
     plt.imshow(plot_img)
     plt.title(title)
-    #plt.pause(0.01)
+    #plt.pause(1)
 
 
 """
@@ -139,25 +140,6 @@ class Feature_Extraction(nn.Module):
       if name in self.sel_conv:
         features.append(x)
     return features
-
-
-def feature_extract(model):
-  """
-  Create a new model that just has the conv layers that are named
-  param model: input VGG19 model
-  returns: new model
-  """
-  new_model = nn.Sequential()
-  i = 0 # counter for each time a convolution layer is seen
-
-  # make names for each conv layer in VGG19
-  for layer in model.children():
-    if isinstance(layer, nn.Conv2d):
-      i += 1
-      name = 'conv_{}'.format(i)
-
-
-    new_model.add_module(name, layer)
 
 
 """
@@ -240,11 +222,16 @@ def training(model, optimizer, n_epochs, content_img, style_img, new_img, style_
     total_loss.backward()
     optimizer.step()
 
-  # save output image
-  final_img = new_img.clone().squeeze()
-  final_img = final_img.clamp_(0, 1)
-  torchvision.utils.save_image(final_img, '{}.png'.format(name))
-  #imshow(final_img)
+    if( ((epoch + 1) % (n_epochs//10)) == 0):
+      print('Current epoch is: ' + str(epoch))
+
+    if( ((epoch + 1) % (n_epochs//4)) == 0):
+      # save output image
+      denormalize = transforms.Normalize((-2.12, -2.04, -1.80), (4.37, 4.46, 4.44))
+      final_img = new_img.clone().squeeze()
+      final_img = denormalize(final_img).clamp_(0, 1)
+      torchvision.utils.save_image(final_img, './out_imgs/{}/{}_epoch_{}.png'.format(name,name, epoch))
+      #imshow(final_img)
 
 """
 ##############################################################################
@@ -268,8 +255,8 @@ def create_parser():
       raise argparse.ArgumentTypeError('Boolean value expected.')
     
   # arguments for logging
-  parser.add_argument('--log_name', type=str, default='testing',
-                        help='Specify log name, if not specified then program will default to testing log name; default=testing')
+  parser.add_argument('--log_name', type=str, default=None,
+                        help='Specify log name, if not specified then will default to args.name; default=None')
 
   # arguments for content and style image locations
   parser.add_argument('--cont_img_loc', type=str, default='https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg', # cute cat img default :3
@@ -283,18 +270,18 @@ def create_parser():
                         help='Flag to determine if style image is from online link or not; default=True')
   
   # arguments for image parameters
-  parser.add_argument('--img_size', type=int, default=256,
-                        help='Determines output image pixel x pixel size; default=256')
-  parser.add_argument('--style_weights', type=int, default=100,
-                        help='Determines how much effect style has on image; default=100')
+  parser.add_argument('--img_size', type=int, default=224,
+                        help='Determines input image scale pixel x pixel size, then center crop of 224 for VGG19; default=224')
+  parser.add_argument('--style_weights', type=int, default=1000000,
+                        help='Determines how much effect style has on image; default=1000000')
   parser.add_argument('--name', type=str, default='test',
                         help='Determines output image name; default=test')
 
   # arguments for other hyperparameters
-  parser.add_argument('--n_epochs', type=int, default=2000,
-                        help='Defines num epochs for training; default=2000')
-  parser.add_argument('--lr', type=float, default=0.001,
-                        help='Defines learning rate for training; default=0.001')
+  parser.add_argument('--n_epochs', type=int, default=500,
+                        help='Defines num epochs for training; default=500')
+  parser.add_argument('--lr', type=float, default=0.03,
+                        help='Defines learning rate for training; default=0.03')
   parser.add_argument('--random_seed', type=int, default=7,
                         help='Defines random seed value; default=7')
 
@@ -325,12 +312,28 @@ if __name__ == '__main__':
   torch.manual_seed(args.random_seed)
   
   # make logs directory if it doesn't exist
-  if(os.path.exists("./logs/") == False):
-    os.mkdir('logs')    
+  if(os.path.exists('./logs/') == False):
+    os.mkdir('logs')   
+  # make output imgs directory if it doesn't exist
+  if(os.path.exists('./out_imgs/') == False):
+    os.mkdir('out_imgs')
+
+  # make new folder inside img output based off args.name
+  if(os.path.exists('./out_imgs/{}'.format(args.name)) == False):
+    os.mkdir('./out_imgs/{}'.format(args.name))
+
+  # if log name not specified then just set to name
+  if(args.log_name == None):
+    args.log_name = args.name
 
   # open log files and fill in hyperparameters
   today_date = str(datetime.today()).replace(':', '_').replace(' ', '_')
   log_file = open('./logs/log_run_{}_{}.txt'.format(today_date, args.log_name), 'w+')
+  log_file.write('cont_img_loc   = {} \n'.format(args.cont_img_loc))
+  log_file.write('style_img_loc  = {} \n'.format(args.style_img_loc))
+  log_file.write('cont_on        = {} \n'.format(args.cont_on))
+  log_file.write('style_on       = {} \n'.format(args.style_on))
+  log_file.write('name           = {} \n'.format(args.name))
   log_file.write('img_size       = {:d} \n'.format(args.img_size))
   log_file.write('num_epochs     = {:d} \n'.format(args.n_epochs))
   log_file.write('learning_rate  = {} \n'.format(args.lr))
@@ -341,7 +344,6 @@ if __name__ == '__main__':
   start_time = time.time()
   # load images
   cont_img, style_img, new_img = load_imgs(args.cont_img_loc, args.cont_on, args.style_img_loc, args.style_on, args.img_size)
-  new_img = new_img.requires_grad_(True)
   log_file.write('Images loaded successfully \n')
   print('Images loaded successfully')
 
