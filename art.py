@@ -85,7 +85,9 @@ def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
       pil_cont = Image.open(io.BytesIO(cont_img.content))
     else:
       pil_cont = Image.open(cont_img_loc)
-    width, height = pil_cont.size
+    orig_cont = pil_cont
+
+    #width, height = pil_cont.size
 
     # create pillow image from style image
     if(style_on):
@@ -93,6 +95,7 @@ def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
       pil_style = Image.open(io.BytesIO(style_img.content))
     else:
       pil_style = Image.open(style_img_loc)
+    orig_style = pil_style
 
 
     # apply transforms to imgs
@@ -103,21 +106,25 @@ def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
     #new_trans = torch.randn(cont_trans.data.size(), device=device)
     new_trans = cont_trans.clone().requires_grad_(True)
 
-    return cont_trans, style_trans, new_trans
+    return orig_cont, orig_style, cont_trans, style_trans, new_trans
 
     
-def imshow(img, title='img'):
+def imshow(img, title='img', orig=False):
     """
     Function to show images
     param img:   input image to show
     param title: title of image
+    param final:  boolean flag to check if this is the original content/style image
     """
-    transform = transforms.ToPILImage()
-    plot_img = img.squeeze(0)
-    plot_img = transform(plot_img)
+    if(orig == False):
+      transform = transforms.ToPILImage()
+      plot_img = img.squeeze(0).cpu()
+      plot_img = transform(plot_img)
+    else:
+      plot_img = img
     plt.imshow(plot_img)
     plt.title(title)
-    #plt.pause(1)
+    plt.pause(1)
 
 
 """
@@ -231,7 +238,7 @@ def training(model, optimizer, n_epochs, content_img, style_img, new_img, style_
       final_img = new_img.clone().squeeze()
       final_img = denormalize(final_img).clamp_(0, 1)
       torchvision.utils.save_image(final_img, './out_imgs/{}/{}_epoch_{}.png'.format(name,name, epoch))
-      #imshow(final_img)
+      imshow(final_img, title='output')
 
 """
 ##############################################################################
@@ -295,7 +302,7 @@ def create_parser():
 # Main, where all the magic starts~
 ##############################################################################
 """
-if __name__ == '__main__':
+def main(): 
   """
   Runs through two images iteratively to make neural artwork~
   """
@@ -342,35 +349,48 @@ if __name__ == '__main__':
 
   # start timer
   start_time = time.time()
+
   # load images
-  cont_img, style_img, new_img = load_imgs(args.cont_img_loc, args.cont_on, args.style_img_loc, args.style_on, args.img_size)
+  orig_cont, orig_style, cont_img, style_img, new_img = load_imgs(args.cont_img_loc, args.cont_on, args.style_img_loc, args.style_on, args.img_size)
   log_file.write('Images loaded successfully \n')
   print('Images loaded successfully')
 
-  # display images
-  imshow(cont_img, title='content')
-  imshow(style_img, title='style')
-  imshow(new_img, title='new')
+  # display original images
+  imshow(orig_cont, title='content', orig=True)
+  imshow(orig_style, title='style', orig=True)
+  #imshow(new_img, title='new')
 
   # define optimizer
   optimizer = torch.optim.Adam([new_img], lr=args.lr, betas=[0.5, 0.999])
+
   # import pretrained model
   model = Feature_Extraction().to(device).eval()
   log_file.write('Model loaded successfully \n')
   print('Model loaded successfully \n')
 
+  # train networks
   log_file.write('Training commencing \n')
   print('Training commencing \n')
   training(model, optimizer, args.n_epochs, cont_img, style_img, new_img, args.style_weights, args.name)
   log_file.write('Training has finished \n')
   print('Training has finished \n')
 
+  # end timer
   end_time = time.time()
   time_taken = end_time - start_time
 
+  # write timing out to log file and terminal
   log_file.write('Time taken: {:.2f}mins \n'.format(time_taken/60))
   print('Time taken: {:.2f}mins \n'.format(time_taken/60))
 
   log_file.close()
 
   
+
+"""
+##############################################################################
+# Main call
+##############################################################################
+"""
+if __name__ == '__main__':
+    main()
