@@ -266,8 +266,8 @@ def create_parser():
                         help='Specify log name, if not specified then will default to args.name; default=None')
 
   # arguments for content and style image locations
-  parser.add_argument('--cont_img_loc', type=str, default='https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg', # cute cat img default :3
-                        help='Determine location of cont img, whether online or not; default=https://i.ytimg.com/vi/I7jgu-8scIA/maxresdefault.jpg')
+  parser.add_argument('--cont_img_loc', type=str, default='https://ichef.bbci.co.uk/images/ic/720x405/p0517py6.jpg', # cute cat img default :3
+                        help='Determine location of cont img, whether online or not; default=https://ichef.bbci.co.uk/images/ic/720x405/p0517py6.jpg')
   parser.add_argument('--cont_on', type=str2bool, nargs='?', default=True,
                         help='Flag to determine if content image is from online link or not; default=True')
 
