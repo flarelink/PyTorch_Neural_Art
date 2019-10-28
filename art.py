@@ -87,8 +87,6 @@ def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
       pil_cont = Image.open(cont_img_loc)
     orig_cont = pil_cont
 
-    #width, height = pil_cont.size
-
     # create pillow image from style image
     if(style_on):
       style_img = requests.get(style_img_loc)
@@ -97,13 +95,11 @@ def load_imgs(cont_img_loc, cont_on, style_img_loc, style_on, out_img_size):
       pil_style = Image.open(style_img_loc)
     orig_style = pil_style
 
-
     # apply transforms to imgs
     cont_trans = trans(pil_cont).unsqueeze(0).to(device)
     style_trans = trans(pil_style).unsqueeze(0).to(device)
     
     # create new image that will become stylized content image
-    #new_trans = torch.randn(cont_trans.data.size(), device=device)
     new_trans = cont_trans.clone().requires_grad_(True)
 
     return orig_cont, orig_style, cont_trans, style_trans, new_trans
@@ -125,6 +121,7 @@ def imshow(img, title='img', orig=False):
     plt.imshow(plot_img)
     plt.title(title)
     plt.pause(1)
+    plt.close()
 
 
 """
@@ -235,10 +232,9 @@ def training(model, optimizer, n_epochs, content_img, style_img, new_img, style_
     if( ((epoch + 1) % (n_epochs//4)) == 0):
       # save output image
       denormalize = transforms.Normalize((-2.12, -2.04, -1.80), (4.37, 4.46, 4.44))
-      final_img = new_img.clone().squeeze()
+      final_img = new_img.clone().squeeze().cpu()
       final_img = denormalize(final_img).clamp_(0, 1)
-      torchvision.utils.save_image(final_img, './out_imgs/{}/{}_epoch_{}.png'.format(name,name, epoch))
-      imshow(final_img, title='output')
+      torchvision.utils.save_image(final_img, './out_imgs/{}/{}_epoch_{}.png'.format(name, name, epoch))
 
 """
 ##############################################################################
@@ -372,6 +368,8 @@ def main():
   log_file.write('Training commencing \n')
   print('Training commencing \n')
   training(model, optimizer, args.n_epochs, cont_img, style_img, new_img, args.style_weights, args.name)
+  mem_allocated = torch.cuda.memory_allocated(torch.cuda.current_device())
+  log_file.write('Memory allocated was: ' + str(mem_allocated) + '\n')
   log_file.write('Training has finished \n')
   print('Training has finished \n')
 
@@ -380,8 +378,8 @@ def main():
   time_taken = end_time - start_time
 
   # write timing out to log file and terminal
-  log_file.write('Time taken: {:.2f}mins \n'.format(time_taken/60))
-  print('Time taken: {:.2f}mins \n'.format(time_taken/60))
+  log_file.write('Time taken: {:.2f} mins \n'.format(time_taken/60))
+  print('Time taken: {:.2f} mins \n'.format(time_taken/60))
 
   log_file.close()
 
